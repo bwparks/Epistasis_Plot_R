@@ -1,0 +1,188 @@
+library(RODBC)
+library(ggplot2)
+setwd("E:/EPISTASIS/HMDP_OBESITY/MALES_ONLY/")
+
+
+#----------------------------------------------------------------------
+#     INPUT TRAIT NAME AND PHENOTYPE FILE DATA AND 2 SNP rsIDS      ###
+#----------------------------------------------------------------------
+traitNAME = 'BODY_FAT_PERCENT_8wks_MALE'
+filename = 'BODY_FAT_PERCENT_8wks_MALE.txt'
+SNP1 <- 'rs30817693'
+SNP2 <- 'rs36737173'
+#------------------------------------------------------
+
+
+#*----------------------------------------------------
+#   GET SNP1 GENOTYPES AND ORGANIZE IN DATAFRAME   ###
+#----------------------------------------------------
+db <- odbcDriverConnect('SERVER=PARKSLAB;DATABASE=HMDP;Trusted_Connection=Yes;DRIVER={SQL Server}')
+SNP1_query <- paste("select * from dbo.genotype_calls_plink_format where rsID='", SNP1, "'", sep="")
+SNP1_GENOTYPES = sqlQuery(db, SNP1_query)
+odbcClose(db) 
+
+SNP1_GENOTYPES = t(SNP1_GENOTYPES)
+SNP1_GENOTYPES = data.frame(SNP1_GENOTYPES)
+SNP1_GENOTYPES$Strain = rownames(SNP1_GENOTYPES)
+rownames(SNP1_GENOTYPES) = NULL
+SNP1_GENOTYPES$SNP1_GENOTYPES = SNP1_GENOTYPES[,1]
+SNP1_GENOTYPES = SNP1_GENOTYPES[,-1]
+SNP1_GENOTYPES = SNP1_GENOTYPES[6:nrow(SNP1_GENOTYPES), ]
+SNP1_GENOTYPES = SNP1_GENOTYPES[order(SNP1_GENOTYPES[,2]), ]
+SNP1_GENOTYPES = na.omit(SNP1_GENOTYPES)
+
+#*----------------------------------------------------
+#   GET SNP2 GENOTYPES AND ORGANIZE IN DATAFRAME   ###
+#----------------------------------------------------
+db <- odbcDriverConnect('SERVER=PARKSLAB;DATABASE=HMDP;Trusted_Connection=Yes;DRIVER={SQL Server}')
+SNP2_query <- paste("select * from dbo.genotype_calls_plink_format where rsID='", SNP2, "'", sep="")
+SNP2_GENOTYPES = sqlQuery(db, SNP2_query)
+odbcClose(db) 
+
+SNP2_GENOTYPES = t(SNP2_GENOTYPES)
+SNP2_GENOTYPES = data.frame(SNP2_GENOTYPES)
+SNP2_GENOTYPES$Strain = rownames(SNP2_GENOTYPES)
+rownames(SNP2_GENOTYPES) = NULL
+SNP2_GENOTYPES$SNP2_GENOTYPES = SNP2_GENOTYPES[,1]
+SNP2_GENOTYPES = SNP2_GENOTYPES[,-1]
+SNP2_GENOTYPES = SNP2_GENOTYPES[6:nrow(SNP2_GENOTYPES), ]
+SNP2_GENOTYPES = SNP2_GENOTYPES[order(SNP2_GENOTYPES[,2]), ]
+SNP2_GENOTYPES = na.omit(SNP2_GENOTYPES)
+
+#*----------------------------------------------------
+#   GET SNP1 and SNP2 locations   ###
+#----------------------------------------------------
+db <- odbcDriverConnect('SERVER=PARKSLAB;DATABASE=HMDP;Trusted_Connection=Yes;DRIVER={SQL Server}')
+SNP1_LOCATION_query <- paste("select snp_chr, snp_bp_mm10, rsID from dbo.genotype_calls_plink_format where rsID ='",SNP1,"'", sep="")
+SNP1_LOCATION = sqlQuery(db, SNP1_LOCATION_query)
+odbcClose(db) 
+SNP1_CHR = as.numeric(SNP1_LOCATION[1,1])
+SNP1_POS = as.numeric(SNP1_LOCATION[1,2])
+
+db <- odbcDriverConnect('SERVER=PARKSLAB;DATABASE=HMDP;Trusted_Connection=Yes;DRIVER={SQL Server}')
+SNP2_LOCATION_query <- paste("select snp_chr, snp_bp_mm10, rsID from dbo.genotype_calls_plink_format where rsID ='",SNP2,"'", sep="")
+SNP2_LOCATION = sqlQuery(db, SNP2_LOCATION_query)
+odbcClose(db) 
+SNP2_CHR = as.numeric(SNP2_LOCATION[1,1])
+SNP2_POS = as.numeric(SNP2_LOCATION[1,2])
+
+#*-------------------------------------------------------
+#   GET SNP1 and SNP2 PVALUE FOR EPISTASIS ANALYSIS   ###
+#--------------------------------------------------------
+db <- odbcDriverConnect('SERVER=PARKSLAB;DATABASE=Epistasis;Trusted_Connection=Yes;DRIVER={SQL Server}')
+EPISTASIS_PVALUE_query <- paste("select Pvalue from dbo.HMDP_OBESITY_MALE_EPISTASIS where SNP1 ='",SNP1,"'","and SNP2 = '",SNP2,"' and Trait = '",traitNAME,"'", sep="")
+EPISTASIS_PVALUE = sqlQuery(db, EPISTASIS_PVALUE_query)
+odbcClose(db) 
+EPISTASIS_PVALUE = as.numeric(EPISTASIS_PVALUE[1,1])
+EPISTASIS_PVALUE = formatC(EPISTASIS_PVALUE, format="e", digits = 2)
+#*----------------------------------------------------
+#   MERGE SNPS and INPUT PHENOTYPE DATA and COMBINE  ###
+#----------------------------------------------------
+SNP1_SNP2 = merge(SNP1_GENOTYPES, SNP2_GENOTYPES, by="Strain")
+TRAIT = read.table(filename, header=T, sep="\t")
+TRAIT = TRAIT[ ,-c(2)] 
+TRAIT = na.omit(TRAIT)
+SNP_TRAIT = merge(SNP1_SNP2, TRAIT, by = "Strain")
+SNP_TRAIT$SNP1_SNP2 = paste(SNP_TRAIT$SNP1, ' | ', SNP_TRAIT$SNP2, sep='')
+SNP_TRAIT = SNP_TRAIT[SNP_TRAIT$SNP1_GENOTYPES != '0 0', ]
+SNP_TRAIT = SNP_TRAIT[SNP_TRAIT$SNP2_GENOTYPES != '0 0', ]
+SNP_TRAIT = SNP_TRAIT[SNP_TRAIT$BODY_FAT_PERCENT_8wks_MALE != '-9', ]
+SNP_TRAIT = SNP_TRAIT[SNP_TRAIT$SNP2_GENOTYPES != 'G T', ]
+
+
+write.table(SNP_TRAIT, file=paste('GENOTYPE_DATA_',traitNAME,'_',SNP1,'_', SNP2,'.txt', sep=''), sep="\t", row.names=F)
+
+
+#-----------------------------------------------------
+#         OUTPUT EPISTASIS PLOTs                     #
+#-----------------------------------------------------
+
+tiff(filename=paste('INTERACTION_BOX_PLOT_Epistasis_',traitNAME,'_',SNP1,'_',SNP2,'.tiff', sep=''), width = 1200, height = 600)
+p <- ggplot(SNP_TRAIT, aes(x=SNP_TRAIT$SNP1_SNP2, y=SNP_TRAIT$BODY_FAT_PERCENT_8wks_MALE)) +
+  geom_jitter(shape=16, position=position_jitter(0.3)) 
+p + geom_boxplot(notch=FALSE, fill="gray83", lwd = 0.8, alpha=0.8) +
+  ggtitle(paste('Chromsome ',SNP1_CHR,': ',prettyNum(SNP1_POS, big.mark=","),' | Chromosome ', 
+                SNP2_CHR, ': ',prettyNum(SNP2_POS, big.mark=","), '\n', sep='')) +
+  annotate("text", x=Inf, y=Inf, label=paste("P = ",EPISTASIS_PVALUE,sep=""), size=10, color="red", vjust=1, hjust=1) +
+  xlab(paste('\nGenotype (SNP 1: ',SNP1,' | SNP 2: ',SNP2,')', sep='')) +
+  ylab("Body Fat Percentage (8 weeks)\n") +
+  theme(plot.title=element_text(color="black", size=30)) +
+  theme(axis.ticks.length=unit(0.3,"cm")) +
+  theme(axis.ticks.x=element_blank()) +
+  theme(axis.text=element_text(color="black", size=30)) +
+  theme(axis.title=element_text(color="black", size=30)) +
+  theme(panel.border=element_blank(), panel.grid.major=element_blank(), panel.grid.minor=element_blank(),
+        panel.background=element_blank()) +
+  theme(axis.line.x=element_line(color="black", size=1)) +
+  theme(axis.line.y=element_line(color="black", size=1)) +
+  theme(plot.margin=unit(c(1,1,1,1),"cm")) 
+dev.off()
+
+#-----    GGPLOT2 BOX PLOT FOR EPISTASIS 
+tiff(filename=paste('SNP1_BOX_PLOT_Epistasis_',traitNAME,'_',SNP1,'.tiff', sep=''), width = 600, height = 600)
+p <- ggplot(SNP_TRAIT, aes(x=SNP_TRAIT$SNP1_GENOTYPES, y=SNP_TRAIT$BODY_FAT_PERCENT_8wks_MALE)) +
+  geom_jitter(shape=16, position=position_jitter(0.3)) 
+p + geom_boxplot(notch=FALSE, fill="gray83", alpha=0.8) +
+  ggtitle(paste('Chromsome ',SNP1_CHR,': ',prettyNum(SNP1_POS, big.mark=","),'\n', sep='')) +
+  xlab(paste('\nGenotype (SNP 1: ',SNP1,')', sep=''))  +
+  ylab("Body Fat Percentage (8 weeks)\n") +
+  theme(axis.ticks.length=unit(0.3,"cm")) +
+  theme(axis.ticks.x=element_blank()) +
+  theme(plot.title=element_text(color="black", size=30)) +
+  theme(axis.text=element_text(color="black", size=30)) +
+  theme(axis.title=element_text(color="black", size=30)) +
+  theme(panel.border=element_blank(), panel.grid.major=element_blank(), panel.grid.minor=element_blank(),
+        panel.background=element_blank()) +
+  theme(axis.line.x=element_line(color="black", size=1)) +
+  theme(axis.line.y=element_line(color="black", size=1)) +
+  theme(plot.margin=unit(c(1,1,1,1),"cm")) 
+dev.off()
+
+
+#-----    GGPLOT2 BOX PLOT FOR EPISTASIS 
+tiff(filename=paste('SNP2_BOX_PLOT_Epistasis_',traitNAME,'_',SNP2,'.tiff', sep=''), width = 600, height = 600)
+p <- ggplot(SNP_TRAIT, aes(x=SNP_TRAIT$SNP2, y=SNP_TRAIT$BODY_FAT_PERCENT_8wks_MALE)) +
+  geom_jitter(shape=16, position=position_jitter(0.3)) 
+p + geom_boxplot(notch=FALSE, fill="gray83", alpha=0.8) +
+  ggtitle(paste('Chromsome ',SNP2_CHR,': ',prettyNum(SNP2_POS, big.mark=","),'\n', sep='')) +
+  xlab(paste('\nGenotype (SNP 2: ',SNP2,')', sep='')) +
+  ylab("Body Fat Percentage (8 weeks)\n") +
+  theme(axis.ticks.length=unit(0.3,"cm")) +
+  theme(axis.ticks.x=element_blank()) +
+  theme(plot.title=element_text(color="black", size=30)) +
+  theme(axis.text=element_text(color="black", size=30)) +
+  theme(axis.title=element_text(color="black", size=30)) +
+  theme(panel.border=element_blank(), panel.grid.major=element_blank(), panel.grid.minor=element_blank(),
+        panel.background=element_blank()) +
+  theme(axis.line.x=element_line(color="black", size=1)) +
+  theme(axis.line.y=element_line(color="black", size=1)) +
+  theme(plot.margin=unit(c(1,1,1,1),"cm")) 
+dev.off()
+
+
+
+
+ 
+# tiff(filename=paste('1Epistasis_FOOD_INTAKE_NMR_BODY_WEIGHT_MALE_',rsID,'_',rsID_2,'.tiff', sep=''), width = 600, height = 600)
+# par(mar=c(5.1, 5.1, 2, 4.1))
+# beeswarm(SNP_TRAIT$FOOD_INTAKE_NMR_BODY_WEIGHT_MALE_ACTUAL ~SNP_TRAIT$SNP1_SNP2, pch=20, method=c('swarm'), 
+#          spacing=0.5, col=c('red', 'blue'),xlab='', ylab='Average Food Intake / Body Weight', cex.lab=1.5, cex.axis=1, las=2)
+# boxplot(SNP_TRAIT$FOOD_INTAKE_NMR_BODY_WEIGHT_MALE_ACTUAL ~SNP_TRAIT$SNP1_SNP2, add=T, names=c('',''), axes=F, outline=F, col='#9E9E9E33')
+# dev.off()
+
+# 
+# ### allele 1 plot
+# tiff(filename=paste('Epistasis_BF0to8wks_',rsID,'.tiff', sep=''), width = 600, height = 600)
+# par(mar=c(5.1, 5.1, 2, 4.1))
+# beeswarm(Merge_HOMA_SNP$BF_Percent_Growth_0to8wks ~ Merge_HOMA_SNP$Allele1, pch=20, method=c('swarm'), spacing=0.9, col=c('red', 'blue'),xlab=paste(rsID), ylab='Body Fat Growth 0 to 8 Weeks', cex.lab=1.5, cex.axis=1.5)
+# boxplot(Merge_HOMA_SNP$BF_Percent_Growth_0to8wks ~ Merge_HOMA_SNP$Allele1, add=T, names=c('', ''), axes=F, outline=F, col='#9E9E9E33')
+# dev.off()
+# 
+# ### allele 2 plot
+# tiff(filename=paste('Epistasis_BF0to8wks_',rsID_2,'.tiff', sep=''), width = 600, height = 600)
+# par(mar=c(5.1, 5.1, 2, 4.1))
+# beeswarm(Merge_HOMA_SNP$BF_Percent_Growth_0to8wks ~ Merge_HOMA_SNP$Allele2, pch=20, method=c('swarm'), spacing=0.9, col=c('red', 'blue'),xlab=paste(rsID_2), ylab='Body Fat Growth 0 to 8 Weeks', cex.lab=1.5, cex.axis=1.5)
+# boxplot(Merge_HOMA_SNP$BF_Percent_Growth_0to8wks ~ Merge_HOMA_SNP$Allele2, add=T, names=c('', ''), axes=F, outline=F, col='#9E9E9E33')
+# dev.off()
+# 
+
